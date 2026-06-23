@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hand Shape Tracking</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      height: 100vh;
+      width: 100vw;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    video {
+      display: none;
+    }
+
+    canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #camera_canvas {
+      z-index: 1;
+    }
+
+    #shape_canvas {
+      z-index: 2;
+    }
+
+    #draw_canvas {
+      z-index: 3;
+    }
+
+    .topButton {
+      position: absolute;
+      right: 14px;
+      z-index: 10;
+      padding: 10px 16px;
+      background: rgba(255, 102, 204, 0.18);
+      border: 1px solid #ff66cc;
+      border-radius: 14px;
+      color: #ff66cc;
+      font-size: 14px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    #voiceButton {
+      top: 14px;
+    }
+
+    #launcherLink {
+      top: 60px;
+      text-decoration: none;
+      box-sizing: border-box;
+    }
+
+    #voicePanel {
+      position: absolute;
+      left: 14px;
+      bottom: 14px;
+      z-index: 10;
+      width: min(520px, calc(100vw - 28px));
+      min-height: 86px;
+      max-height: 30vh;
+      overflow-y: auto;
+      padding: 12px 14px;
+      background: rgba(0, 0, 0, 0.68);
+      border: 1px solid rgba(125, 255, 234, 0.75);
+      border-radius: 14px;
+      color: #dff;
+      font-size: 16px;
+      line-height: 1.45;
+      box-sizing: border-box;
+    }
+
+    #voiceLabel {
+      color: #7dffea;
+      font-size: 13px;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+
+    #voiceText {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    #voiceSource {
+      color: #7dffea;
+      font-size: 13px;
+      margin: 6px 0;
+    }
+
+    #micMeter {
+      height: 6px;
+      width: 100%;
+      margin: 8px 0 4px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 999px;
+    }
+
+    #micLevel {
+      height: 100%;
+      width: 0%;
+      background: #7dffea;
+      box-shadow: 0 0 12px rgba(125, 255, 234, 0.9);
+      transition: width 0.08s linear;
+    }
+
+    #commandRow {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    #commandInput {
+      flex: 1;
+      min-width: 0;
+      padding: 8px 10px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(125, 255, 234, 0.45);
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+    }
+
+    #commandButton {
+      padding: 8px 12px;
+      background: rgba(125, 255, 234, 0.16);
+      border: 1px solid rgba(125, 255, 234, 0.75);
+      border-radius: 8px;
+      color: #dff;
+      cursor: pointer;
+    }
+
+    #status {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 10;
+      padding: 10px 14px;
+      background: rgba(0, 0, 0, 0.65);
+      border: 1px solid #ff66cc;
+      border-radius: 14px;
+      color: #ff88dd;
+      font-size: 15px;
+      max-width: calc(100vw - 40px);
+    }
+
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div id="status">Allow camera access. Use both hands to create shapes.</div>
+    <button id="voiceButton" class="topButton">Voice: OFF</button>
+    <a id="launcherLink" class="topButton" href="http://127.0.0.1:8989/status" target="_blank" rel="noopener">Launcher Check</a>
+    <div id="voicePanel">
+      <div id="voiceLabel">Voice notes</div>
+      <div id="micMeter"><div id="micLevel"></div></div>
+      <div id="voiceSource">Native voice: waiting for launcher...</div>
+      <div id="voiceText">Click Voice and speak. Say "open YouTube", "open Google", or any sentence to write it here.</div>
+      <div id="commandRow">
+        <input id="commandInput" type="text" placeholder="Type command if voice fails" />
+        <button id="commandButton" type="button">Run</button>
+      </div>
+    </div>
+    <video id="input_video" autoplay muted playsinline></video>
+    <canvas id="camera_canvas"></canvas>
+    <canvas id="shape_canvas"></canvas>
+    <canvas id="draw_canvas"></canvas>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script>
+    const videoElement = document.getElementById('input_video');
+    const cameraCanvas = document.getElementById('camera_canvas');
+    const shapeCanvas = document.getElementById('shape_canvas');
+    const drawCanvas = document.getElementById('draw_canvas');
+    const cameraCtx = cameraCanvas.getContext('2d');
+    const shapeCtx = shapeCanvas.getContext('2d');
+    const drawCtx = drawCanvas.getContext('2d');
+    const statusElement = document.getElementById('status');
+    const voiceButton = document.getElementById('voiceButton');
+    const voiceText = document.getElementById('voiceText');
+    const voiceSource = document.getElementById('voiceSource');
+    const micLevel = document.getElementById('micLevel');
+    const commandInput = document.getElementById('commandInput');
+    const commandButton = document.getElementById('commandButton');
+
+    let airTexts = [];
+    let voiceMode = false;
+    let recognition = null;
+    let recognitionActive = false;
+    let micReady = false;
+    let micStream = null;
+    let micAnimationFrame = null;
+    let voiceStopRequested = false;
+    let lastNativeVoiceId = 0;
+    let savedVoiceText = '';
+
+    const hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+    });
+
+    hands.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.7,
+    });
+
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        await hands.send({image: videoElement});
+      },
+      width: 1280,
+      height: 720,
+    });
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      statusElement.textContent = 'Camera is unavailable. Open this page in Chrome/Edge on localhost or HTTPS.';
+    } else {
+      statusElement.textContent = 'Requesting camera access... choose Allow when the browser asks.';
+      camera.start().then(() => {
+        statusElement.textContent = 'Tracking started. Use both hands to create shapes.';
+      }).catch((error) => {
+        statusElement.textContent = error.name === 'NotAllowedError'
+          ? 'Camera permission is blocked. Click the camera icon in the address bar and allow access.'
+          : 'Camera access denied or unavailable. Please enable your webcam.';
+        console.error(error);
+      });
+    }
+
+    setupVoiceAssistant();
+    startNativeVoicePolling();
+    commandButton.addEventListener('click', runTypedCommand);
+    commandInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        runTypedCommand();
+      }
+    });
+
+    function onResults(results) {
+      resizeCanvases();
+      cameraCtx.clearRect(0, 0, cameraCanvas.width, cameraCanvas.height);
+      if (results.image) {
+        cameraCtx.drawImage(results.image, 0, 0, cameraCanvas.width, cameraCanvas.height);
+      }
+
+      shapeCtx.clearRect(0, 0, shapeCanvas.width, shapeCanvas.height);
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      drawHandLandmarks(results.multiHandLandmarks, results.multiHandedness);
+      drawHandShapes(results.multiHandLandmarks, results.multiHandedness);
+
+      drawVoiceAirText();
+    }
+
+    function resizeCanvases() {
+      if (cameraCanvas.width !== videoElement.videoWidth || cameraCanvas.height !== videoElement.videoHeight) {
+        cameraCanvas.width = videoElement.videoWidth;
+        cameraCanvas.height = videoElement.videoHeight;
+      }
+      if (shapeCanvas.width !== videoElement.videoWidth || shapeCanvas.height !== videoElement.videoHeight) {
+        shapeCanvas.width = videoElement.videoWidth;
+        shapeCanvas.height = videoElement.videoHeight;
+      }
+      if (drawCanvas.width !== videoElement.videoWidth || drawCanvas.height !== videoElement.videoHeight) {
+        drawCanvas.width = videoElement.videoWidth;
+        drawCanvas.height = videoElement.videoHeight;
+      }
+    }
+
+    function drawHandLandmarks(handLandmarks, handednesses) {
+      if (!handLandmarks || handLandmarks.length === 0) return;
+      for (let i = 0; i < handLandmarks.length; i++) {
+        const landmarks = handLandmarks[i];
+        const label = handednesses && handednesses[i] ? handednesses[i].label : `Hand ${i + 1}`;
+        const color = label === 'Left' ? '#7dffea' : '#ff79c6';
+        drawConnectors(cameraCtx, landmarks, HAND_CONNECTIONS, {
+          color,
+          lineWidth: 4,
+        });
+        drawLandmarks(cameraCtx, landmarks, {
+          color: '#ffffff',
+          lineWidth: 2,
+          radius: 4,
+        });
+      }
+    }
+
+    function drawHandShapes(handLandmarks, handednesses) {
+      if (!handLandmarks || handLandmarks.length === 0) return;
+
+      const tipIndices = [4, 8, 12, 16, 20];
+
+      for (let i = 0; i < handLandmarks.length; i++) {
+        const landmarks = handLandmarks[i];
+        const label = handednesses && handednesses[i] ? handednesses[i].label : `Hand ${i + 1}`;
+        const color = label === 'Left' ? '#7dffea' : '#ff79c6';
+        const fillColor = label === 'Left' ? 'rgba(125,255,234,0.2)' : 'rgba(255,121,198,0.2)';
+        const center = getPalmCenter(landmarks);
+        const points = tipIndices.map((index) => ({
+          x: landmarks[index].x * shapeCanvas.width,
+          y: landmarks[index].y * shapeCanvas.height,
+        }));
+
+        shapeCtx.save();
+        shapeCtx.strokeStyle = color;
+        shapeCtx.lineWidth = 4;
+        shapeCtx.globalAlpha = 0.65;
+
+        points.forEach((pt) => {
+          shapeCtx.beginPath();
+          shapeCtx.moveTo(center.x, center.y);
+          shapeCtx.lineTo(pt.x, pt.y);
+          shapeCtx.stroke();
+        });
+
+        shapeCtx.globalAlpha = 0.18;
+        shapeCtx.fillStyle = fillColor;
+        shapeCtx.beginPath();
+        points.forEach((pt, index) => {
+          if (index === 0) shapeCtx.moveTo(pt.x, pt.y);
+          else shapeCtx.lineTo(pt.x, pt.y);
+        });
+        shapeCtx.closePath();
+        shapeCtx.fill();
+
+        shapeCtx.restore();
+      }
+
+      if (handLandmarks.length === 2) {
+        drawHandBridge(handLandmarks[0], handLandmarks[1]);
+      }
+    }
+
+    function drawHandBridge(handA, handB) {
+      const tipIndices = [4, 8, 12, 16, 20];
+      shapeCtx.save();
+      shapeCtx.strokeStyle = 'rgba(255,102,204,0.9)';
+      shapeCtx.lineWidth = 3;
+      shapeCtx.globalAlpha = 0.6;
+
+      const pointsA = tipIndices.map((index) => getPoint(handA[index]));
+      const pointsB = tipIndices.map((index) => getPoint(handB[index]));
+
+      pointsA.forEach((ptA, index) => {
+        const ptB = pointsB[index];
+        shapeCtx.beginPath();
+        shapeCtx.moveTo(ptA.x, ptA.y);
+        shapeCtx.lineTo(ptB.x, ptB.y);
+        shapeCtx.stroke();
+      });
+
+      shapeCtx.globalAlpha = 0.14;
+      shapeCtx.fillStyle = 'rgba(255,102,204,0.14)';
+      shapeCtx.beginPath();
+      pointsA.forEach((pt, index) => {
+        if (index === 0) shapeCtx.moveTo(pt.x, pt.y);
+        else shapeCtx.lineTo(pt.x, pt.y);
+      });
+      pointsB.slice().reverse().forEach((pt) => {
+        shapeCtx.lineTo(pt.x, pt.y);
+      });
+      shapeCtx.closePath();
+      shapeCtx.fill();
+      shapeCtx.restore();
+    }
+
+    function getPalmCenter(landmarks) {
+      const p0 = landmarks[0];
+      const p5 = landmarks[5];
+      const p17 = landmarks[17];
+      return {
+        x: ((p0.x + p5.x + p17.x) / 3) * shapeCanvas.width,
+        y: ((p0.y + p5.y + p17.y) / 3) * shapeCanvas.height,
+      };
+    }
+
+    function getPoint(landmark) {
+      return {
+        x: landmark.x * shapeCanvas.width,
+        y: landmark.y * shapeCanvas.height,
+      };
+    }
+
+    function distance(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function setupVoiceAssistant() {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        voiceButton.disabled = true;
+        voiceButton.textContent = 'Voice unavailable';
+        voiceText.textContent = 'Voice recognition is not supported in this browser. Try Chrome or Edge.';
+        return;
+      }
+
+      recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        recognitionActive = true;
+        statusElement.textContent = 'Listening now. Speak clearly.';
+        voiceText.textContent = savedVoiceText || 'Listening now...';
+      };
+
+      recognition.onresult = (event) => {
+        let interimText = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript.trim();
+          if (event.results[i].isFinal) {
+            handleVoiceCommand(transcript);
+          } else {
+            interimText += transcript;
+          }
+        }
+
+        updateVoiceText(interimText);
+      };
+
+      recognition.onerror = (event) => {
+        recognitionActive = false;
+        if (voiceStopRequested && event.error === 'aborted') return;
+        if (['not-allowed', 'audio-capture', 'network'].includes(event.error)) {
+          voiceMode = false;
+          voiceButton.textContent = 'Voice: OFF';
+        }
+        const messages = {
+          'not-allowed': 'Microphone permission is blocked. Click the microphone icon in the address bar and choose Allow.',
+          'audio-capture': 'No microphone was found. Connect or enable your microphone.',
+          'network': 'Chrome speech recognition is unavailable. Windows native voice can still work through start_voice_ai.bat.',
+          'no-speech': 'Listening... I did not catch that. Speak clearly after turning Voice ON.',
+          'aborted': 'Voice listening stopped.',
+        };
+        statusElement.textContent = messages[event.error] || `Voice error: ${event.error}`;
+        if (event.error === 'network') {
+          voiceText.textContent = 'Your mic can be allowed, but browser speech-to-text still needs Chrome/Edge speech service.';
+        }
+      };
+
+      recognition.onend = () => {
+        recognitionActive = false;
+        if (voiceMode && !voiceStopRequested) {
+          window.setTimeout(startVoiceRecognition, 800);
+        }
+      };
+
+      voiceButton.addEventListener('click', toggleVoiceAssistant);
+    }
+
+    function toggleVoiceAssistant() {
+      voiceMode = !voiceMode;
+      voiceButton.textContent = voiceMode ? 'Voice: ON' : 'Voice: OFF';
+
+      if (voiceMode) {
+        voiceStopRequested = false;
+        statusElement.textContent = 'Starting voice... allow microphone, then wait for "Speak now".';
+        voiceText.textContent = savedVoiceText || 'Starting voice...';
+        const hasMic = prepareMicrophone();
+        if (hasMic) {
+          startVoiceRecognition();
+        } else {
+          voiceMode = false;
+          voiceButton.textContent = 'Voice: OFF';
+        }
+      } else {
+        voiceStopRequested = true;
+        recognitionActive = false;
+        try {
+          recognition.stop();
+        } catch (error) {
+          console.warn(error);
+        }
+        resetMicMeter();
+        statusElement.textContent = 'Voice assistant stopped.';
+      }
+    }
+
+    function addVoiceAirText(text) {
+      airTexts.push({
+        text,
+        x: drawCanvas.width * 0.5,
+        y: drawCanvas.height * 0.5,
+        createdAt: Date.now(),
+      });
+      if (airTexts.length > 5) {
+        airTexts.shift();
+      }
+    }
+
+    function drawVoiceAirText() {
+      const now = Date.now();
+      airTexts = airTexts.filter((item) => now - item.createdAt < 12000);
+      if (!airTexts.length) return;
+
+      drawCtx.save();
+      drawCtx.textAlign = 'center';
+      drawCtx.textBaseline = 'middle';
+      drawCtx.font = `700 ${Math.max(28, drawCanvas.width * 0.045)}px Arial`;
+      drawCtx.lineWidth = 8;
+      drawCtx.shadowColor = 'rgba(125, 255, 234, 0.9)';
+      drawCtx.shadowBlur = 18;
+
+      airTexts.forEach((item, index) => {
+        const age = now - item.createdAt;
+        const alpha = age > 9000 ? 1 - ((age - 9000) / 3000) : 1;
+        const y = item.y + (index - (airTexts.length - 1) / 2) * 62;
+        drawCtx.globalAlpha = Math.max(0, alpha);
+        drawCtx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+        drawCtx.fillStyle = '#7dffea';
+        drawWrappedText(item.text, item.x, y, drawCanvas.width * 0.82, 52);
+      });
+
+      drawCtx.restore();
+    }
+
+    function drawWrappedText(text, x, y, maxWidth, lineHeight) {
+      const words = text.split(/\s+/);
+      const lines = [];
+      let line = '';
+
+      for (const word of words) {
+        const testLine = line ? `${line} ${word}` : word;
+        if (drawCtx.measureText(testLine).width > maxWidth && line) {
+          lines.push(line);
+          line = word;
+        } else {
+          line = testLine;
+        }
+      }
+      lines.push(line);
+
+      const startY = y - ((lines.length - 1) * lineHeight) / 2;
+      lines.forEach((lineText, index) => {
+        const lineY = startY + index * lineHeight;
+        drawCtx.strokeText(lineText, x, lineY);
+        drawCtx.fillText(lineText, x, lineY);
+      });
+    }
+
+    function prepareMicrophone() {
+      if (micReady) return true;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        statusElement.textContent = 'Microphone needs localhost or HTTPS. Open this page from http://127.0.0.1:8989/index.html.';
+        voiceText.textContent = 'Run start_voice_ai.bat, then open http://127.0.0.1:8989/index.html';
+        return false;
+      }
+
+      micReady = true;
+      return true;
+    }
+
+    function flashMicMeter(stream) {
+      return new Promise((resolve) => {
+        startMicMeter(stream);
+        window.setTimeout(() => {
+          if (micAnimationFrame) {
+            cancelAnimationFrame(micAnimationFrame);
+            micAnimationFrame = null;
+          }
+          resolve();
+        }, 900);
+      });
+    }
+
+    function startMicMeter(stream) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+
+      const audioContext = new AudioContext();
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaStreamSource(stream);
+      const data = new Uint8Array(analyser.fftSize);
+      source.connect(analyser);
+
+      function drawMeter() {
+        analyser.getByteTimeDomainData(data);
+        let total = 0;
+        for (const value of data) {
+          const centered = value - 128;
+          total += centered * centered;
+        }
+        const volume = Math.sqrt(total / data.length);
+        micLevel.style.width = `${Math.min(100, volume * 5)}%`;
+        micAnimationFrame = requestAnimationFrame(drawMeter);
+      }
+
+      drawMeter();
+    }
+
+    function resetMicMeter() {
+      if (micAnimationFrame) {
+        cancelAnimationFrame(micAnimationFrame);
+        micAnimationFrame = null;
+      }
+      micLevel.style.width = '0%';
+    }
+
+    function startVoiceRecognition() {
+      if (!voiceMode || recognitionActive) return;
+
+      try {
+        statusElement.textContent = 'Voice is ready. Speak after the browser shows the microphone icon.';
+        voiceText.textContent = savedVoiceText || 'Speak now...';
+        recognition.start();
+      } catch (error) {
+        console.warn(error);
+      }
+    }
+
+    async function handleVoiceCommand(transcript) {
+      if (!transcript) return;
+
+      savedVoiceText += `${transcript}\n`;
+      await handleCommandText(transcript);
+    }
+
+    function startNativeVoicePolling() {
+      window.setInterval(async () => {
+        try {
+          const response = await fetch('http://127.0.0.1:8989/last-voice');
+          const data = await response.json();
+          voiceSource.textContent = data.text
+            ? `Native voice connected. Last heard: "${data.text}"`
+            : 'Native voice connected. Speak near your microphone.';
+          if (data.ok && data.id && data.id !== lastNativeVoiceId && data.text) {
+            lastNativeVoiceId = data.id;
+            await handleNativeVoiceText(data);
+          }
+        } catch (error) {
+          voiceSource.textContent = 'Native voice not connected. Run start_voice_ai.bat.';
+          console.warn(error);
+        }
+      }, 700);
+    }
+
+    async function handleNativeVoiceText(data) {
+      const text = data.text || '';
+      savedVoiceText += `${text}\n`;
+      updateVoiceText();
+      statusElement.textContent = data.message || `Windows voice heard: ${text}`;
+      if (!data.handled) {
+        await handleCommandText(text);
+      }
+    }
+
+    async function runTypedCommand() {
+      const commandText = commandInput.value.trim();
+      if (!commandText) return;
+
+      commandInput.value = '';
+      savedVoiceText += `${commandText}\n`;
+      updateVoiceText();
+      await handleCommandText(commandText);
+    }
+
+    async function handleCommandText(commandText) {
+      const handled = await runVoiceCommand(commandText);
+      if (!handled) {
+        const textToWrite = commandText.replace(/^write\s+/i, '').trim();
+        addVoiceAirText(textToWrite);
+        statusElement.textContent = 'Voice text written in air.';
+      }
+    }
+
+    function updateVoiceText(interimText = '') {
+      voiceText.textContent = savedVoiceText + (interimText ? `Listening: ${interimText}` : '');
+      voiceText.parentElement.scrollTop = voiceText.parentElement.scrollHeight;
+    }
+
+    async function runVoiceCommand(transcript) {
+      const command = transcript.toLowerCase();
+      const spotifyQuery = getSpotifyPlayQuery(command);
+      if (spotifyQuery !== null) {
+        const target = spotifyQuery ? `spotify:search:${encodeURIComponent(spotifyQuery)}` : 'spotify:';
+        window.open(target, '_self');
+        statusElement.textContent = spotifyQuery ? `Searching Spotify App for ${spotifyQuery}.` : 'Opening Spotify App.';
+        return true;
+      }
+
+      if (command.includes('brightness')) {
+        const level = command.includes('high') || command.includes('increase') || command.includes('up')
+          ? 'high'
+          : 'low';
+        await sendLaptopCommand(`http://127.0.0.1:8989/brightness?level=${level}`);
+        return true;
+      }
+
+      if (command.includes('sound') || command.includes('volume')) {
+        const level = command.includes('mute')
+          ? 'mute'
+          : command.includes('high') || command.includes('increase') || command.includes('up')
+            ? 'high'
+            : 'low';
+        await sendLaptopCommand(`http://127.0.0.1:8989/volume?level=${level}`);
+        return true;
+      }
+
+      if (command.startsWith('write ')) return false;
+      if (!command.startsWith('open ')) return false;
+
+      const requestedApp = command.replace(/^open\s+/, '').trim();
+      const websites = {
+        google: 'https://www.google.com',
+        youtube: 'https://www.youtube.com',
+        gmail: 'https://mail.google.com',
+        instagram: 'https://www.instagram.com',
+        facebook: 'https://www.facebook.com',
+        whatsapp: 'https://web.whatsapp.com',
+        spotify: 'spotify:',
+        github: 'https://github.com',
+      };
+
+      const siteName = Object.keys(websites).find((name) => requestedApp.includes(name));
+      if (siteName) {
+        window.open(websites[siteName], '_blank', 'noopener');
+        statusElement.textContent = `Opening ${siteName}.`;
+        return true;
+      }
+
+      const laptopApps = [
+        'visual studio code',
+        'microsoft edge',
+        'google chrome',
+        'command prompt',
+        'file explorer',
+        'task manager',
+        'note pad',
+        'notepad',
+        'calculator',
+        'calc',
+        'ms paint',
+        'paint',
+        'cmd',
+        'powershell',
+        'chrome',
+        'edge',
+        'vscode',
+        'vs code',
+        'explorer',
+        'settings',
+        'download folder',
+        'downloads folder',
+        'downloads',
+        'download',
+        'documents folder',
+        'documents',
+        'document',
+        'desktop folder',
+        'desktop',
+        'pictures',
+        'videos',
+        'music',
+        'this pc',
+        'my computer',
+        'control panel',
+        'recycle bin',
+        'word',
+        'microsoft word',
+        'excel',
+        'microsoft excel',
+        'powerpoint',
+        'microsoft powerpoint',
+        'outlook',
+        'microsoft outlook',
+        'teams',
+        'microsoft teams',
+        'camera',
+        'photos',
+        'microsoft store',
+        'store',
+        'zoom',
+        'vlc',
+        'telegram',
+        'discord',
+        'skype',
+        'firefox',
+        'brave',
+        'opera',
+        'one drive',
+        'onedrive',
+      ];
+      const laptopApp = laptopApps.find((name) => requestedApp.includes(name));
+
+      try {
+        await sendLaptopCommand(`http://127.0.0.1:8989/open?app=${encodeURIComponent(laptopApp || requestedApp)}`);
+      } catch (error) {
+        statusElement.textContent = 'Start voice_launcher.py first, then try the app command again.';
+        console.error(error);
+      }
+      return true;
+    }
+
+    function getSpotifyPlayQuery(command) {
+      if (command === 'open spotify') return '';
+      if (!command.startsWith('play ')) return null;
+
+      return command
+        .replace(/^play\s+/, '')
+        .replace(/\s+on spotify$/, '')
+        .replace(/\s+in spotify$/, '')
+        .replace(/\s+from spotify$/, '')
+        .replace(/^some\s+/, '')
+        .replace(/^music\s*$/, '')
+        .trim();
+    }
+
+    async function sendLaptopCommand(url) {
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+        statusElement.textContent = data.message || 'Laptop command sent.';
+      } catch (error) {
+        statusElement.textContent = 'Start voice_launcher.py first, then try the laptop command again.';
+        console.error(error);
+      }
+    }
+  </script>
+</body>
+</html>
+
